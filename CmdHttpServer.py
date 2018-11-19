@@ -66,8 +66,8 @@ class CmdHttpServerReq(BaseHTTPRequestHandler):
 		return out.getvalue()
 
 	# Send error to client
-	def _send_error(self, code, error):
-		self._send_response(code, "html", "<html><body><h1>%i - %s</h1></body></html>" % (code, error))
+	def _send_error(self, code, error, ext={}):
+		self._send_response(code, "html", "<html><body><h1>%i - %s</h1></body></html>" % (code, error), ext)
 
 
 	# Send response to client
@@ -126,10 +126,10 @@ class CmdHttpServerReq(BaseHTTPRequestHandler):
 
 
 	# Send json data to client
-	def sendJSON(self, code, j):
+	def sendJSON(self, code, j, ext={}):
 
 		try:
-			self._send_response(code, "json", json.dumps(j))
+			self._send_response(code, "json", json.dumps(j), ext)
 
 		except:
 			ts = ''
@@ -142,7 +142,7 @@ class CmdHttpServerReq(BaseHTTPRequestHandler):
 
 
 	# Process commands
-	def processCmd(self, ch, path, qp, pd):
+	def processCmd(self, ch, path, qp, pd, ext={}):
 
 		# Is there post data?
 		if pd:
@@ -154,7 +154,7 @@ class CmdHttpServerReq(BaseHTTPRequestHandler):
 		if 1 < len(path):
 
 			if path[1] not in ch:
-				return self.sendJSON(200, {"error": "Unsupported"})
+				return self.sendJSON(200, {"error": "Unsupported"}, ext)
 
 			try:
 				ret = ch[path[1]](self, path, qp, pd)
@@ -162,19 +162,19 @@ class CmdHttpServerReq(BaseHTTPRequestHandler):
 				ts = ''
 				if self.STACK:
 					ts = traceback.format_exc()
-				self.sendJSON(500, {"error": "Server error handling response", "tb": ts})
+				self.sendJSON(500, {"error": "Server error handling response", "tb": ts}, ext)
 				if self.DEBUG:
 					raise
 				return
 
-			self.sendJSON(200, ret)
+			self.sendJSON(200, ret, ext)
 
 			return
 
 		#-----------------------------------------------------------
 		# Multiple commands
 		if 'cmds' not in qp or not isinstance(qp['cmds'], dict):
-			return self.sendJSON(200, {"error": "Bad command format, 'cmds' field is missing"})
+			return self.sendJSON(200, {"error": "Bad command format, 'cmds' field is missing"}, ext)
 
 		# Process each command
 		rep = {}
@@ -240,23 +240,24 @@ class CmdHttpServerReq(BaseHTTPRequestHandler):
 							raise
 
 		# Send combined responses
-		self.sendJSON(200, rep)
+		self.sendJSON(200, rep, ext)
 
 
-	def sendFile(self, h, path, qp):
+	def sendFile(self, h, path, qp, ext={}):
 
 		if 'path' not in h:
 
 			# Redirect?
 			if 'default' in h:
-				return self._set_headers(301, 0, 0, {'Location': h['default']})
+				ext['Location'] = h['default']
+				return self._set_headers(301, 0, 0, ext)
 
-			return self._send_error(404, "File not found")
+			return self._send_error(404, "File not found", ext)
 
 		# Verify root path exists
 		root = h['path']
 		if not os.path.exists(root):
-			return self._send_error(404, "File not found")
+			return self._send_error(404, "File not found", ext)
 
 		# Build the name to the file
 		fname = os.sep.join(path[1:])
@@ -267,7 +268,7 @@ class CmdHttpServerReq(BaseHTTPRequestHandler):
 
 			# Was a default name specified?
 			if 'default' not in h:
-				return self._send_error(404, "File not found")
+				return self._send_error(404, "File not found", ext)
 
 			# We will attempt a redirect
 			fname = h['default']
@@ -275,7 +276,7 @@ class CmdHttpServerReq(BaseHTTPRequestHandler):
 
 		# Don't allow user to move up
 		if 0 <= fname.find('..'):
-			return self._send_error(404, "File not found")
+			return self._send_error(404, "File not found", ext)
 
 		# Full path to the file
 		fpath = os.path.join(root, fname)
@@ -288,24 +289,22 @@ class CmdHttpServerReq(BaseHTTPRequestHandler):
 
 		# Punt if we didn't get a file
 		if not fh:
-			return self._send_error(404, "File not found")
+			return self._send_error(404, "File not found", ext)
 
 		# File length
 		flen = os.path.getsize(fpath)
 
 		# Redirect to default?
 		if len(floc):
-			return self._set_headers(301, fpath, flen, {'Location': floc})
-
-		# Extra headers to send
-		hdrs = {}
+			ext['Location'] = floc
+			return self._set_headers(301, fpath, flen, ext)
 
 		# Download only
 		if 'download' in h and h['download']:
-			hdrs['Content-Disposition'] = "attachment; filename=%s" % fname
+			ext['Content-Disposition'] = "attachment; filename=%s" % fname
 
 		# Send headers
-		self._set_headers(200, fpath, flen, hdrs)
+		self._set_headers(200, fpath, flen, ext)
 
 		# Send file data
 		while True:
@@ -319,17 +318,23 @@ class CmdHttpServerReq(BaseHTTPRequestHandler):
 
 	def runHandler(self, h, path, qp, pd):
 
+		ext = {}
+
+		# Extra headers?
+		if 'h' in h and len(h['h']):
+			ext = h['h']
+
 		# Command handler?
 		if 'c' in h:
-			self.processCmd(h['c'], path, qp, pd)
+			self.processCmd(h['c'], path, qp, pd, ext)
 			return
 
 		# File path?
 		if 'f' in h:
-			self.sendFile(h['f'], path, qp)
+			self.sendFile(h['f'], path, qp, ext)
 			return
 
-		return self.sendJSON(400, {"error": "Invalid handler"})
+		return self.sendJSON(400, {"error": "Invalid handler"}, ext)
 
 
 	def processRequest(self, pd):
